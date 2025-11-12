@@ -2,35 +2,47 @@ from dotenv import load_dotenv
 from langsmith import Client
 from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
-from langchain_tavily import TavilySearch
+from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import HumanMessage
+from langchain_core.output_parsers.pydantic import PydanticOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import RunnableLambda
+
+from prompt import REACT_PROMPT_WITH_FORMAT_INSTRUCTIONS
+from schemas import AgentResponse
 
 load_dotenv()
 
-tools = [TavilySearch(time_range="month", topic="general")]
+tools = [TavilySearchResults(max_results=5)]
 llm = ChatOllama(model="llama3.2")
 
 client = Client()
-react_prompt = client.pull_prompt("hwchase17/react")
+output_parser = PydanticOutputParser(pydantic_object=AgentResponse)
 
-system_prompt_str = react_prompt.format(**{var: "" for var in react_prompt.input_variables})
-
-agent = create_agent(
-    model=llm,
-    tools=tools,
-    system_prompt=system_prompt_str
+format_instructions = output_parser.get_format_instructions()
+system_prompt_str = REACT_PROMPT_WITH_FORMAT_INSTRUCTIONS.format(
+    tools="{tools}",
+    tool_names="{tool_names}",
+    input="{input}",
+    agent_scratchpad="{agent_scratchpad}",
+    format_instructions=format_instructions
 )
+
+agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt_str)
+extract_output = RunnableLambda(lambda x: x["messages"][-1].content)
+parse_output = RunnableLambda(lambda x: output_parser.parse(x))
+chain = agent | extract_output | parse_output
+
 
 def main():
     print("Hello from langchain-course!")
 
     user_input = "Search for 3 job postings for an AI engineer using LangChain in the Bay Area on LinkedIn and list their details"
 
-    result = agent.invoke({
-        "messages": [HumanMessage(content=user_input)]
-    })
+    result = chain.invoke({"messages": [HumanMessage(content=user_input)]})
 
     print("Result:", result.content if hasattr(result, "content") else result)
+
 
 if __name__ == "__main__":
     main()
