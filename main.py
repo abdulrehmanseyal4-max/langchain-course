@@ -4,7 +4,6 @@ from langchain.agents import create_agent
 from langchain_ollama import ChatOllama
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.messages import HumanMessage
-from langchain_core.output_parsers.pydantic import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableLambda
 
@@ -15,11 +14,11 @@ load_dotenv()
 
 tools = [TavilySearchResults(max_results=5)]
 llm = ChatOllama(model="llama3.2")
+structured_llm = llm.with_structured_output(AgentResponse)
 
 client = Client()
-output_parser = PydanticOutputParser(pydantic_object=AgentResponse)
 
-format_instructions = output_parser.get_format_instructions()
+format_instructions = ""
 system_prompt_str = REACT_PROMPT_WITH_FORMAT_INSTRUCTIONS.format(
     tools="{tools}",
     tool_names="{tool_names}",
@@ -30,8 +29,7 @@ system_prompt_str = REACT_PROMPT_WITH_FORMAT_INSTRUCTIONS.format(
 
 agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt_str)
 extract_output = RunnableLambda(lambda x: x["messages"][-1].content)
-parse_output = RunnableLambda(lambda x: output_parser.parse(x))
-chain = agent | extract_output | parse_output
+chain = agent | extract_output | structured_llm
 
 
 def main():
