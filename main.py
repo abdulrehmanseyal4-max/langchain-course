@@ -1,46 +1,66 @@
-from dotenv import load_dotenv
-from langsmith import Client
-from langchain.agents import create_agent
-from langchain_ollama import ChatOllama
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.messages import HumanMessage
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnableLambda
+from typing import List
 
-from prompt import REACT_PROMPT_WITH_FORMAT_INSTRUCTIONS
-from schemas import AgentResponse
+from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain.tools import tool, BaseTool
+from langchain_ollama import ChatOllama
+
+from callbacks import AgentCallbackHandler
 
 load_dotenv()
 
-tools = [TavilySearchResults(max_results=5)]
-llm = ChatOllama(model="llama3.2")
-structured_llm = llm.with_structured_output(AgentResponse)
 
-client = Client()
+@tool
+def get_text_length(text: str) -> int:
+    """Returns the length of a text by characters"""
+    print(f"get_text_length enter with {text=}")
+    text = text.strip("'\n").strip(
+        '"'
+    )  
 
-format_instructions = ""
-system_prompt_str = REACT_PROMPT_WITH_FORMAT_INSTRUCTIONS.format(
-    tools="{tools}",
-    tool_names="{tool_names}",
-    input="{input}",
-    agent_scratchpad="{agent_scratchpad}",
-    format_instructions=format_instructions
-)
-
-agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt_str)
-extract_output = RunnableLambda(lambda x: x["messages"][-1].content)
-chain = agent | extract_output | structured_llm
+    return len(text)
 
 
-def main():
-    print("Hello from langchain-course!")
-
-    user_input = "Search for 3 job postings for an AI engineer using LangChain in the Bay Area on LinkedIn and list their details"
-
-    result = chain.invoke({"messages": [HumanMessage(content=user_input)]})
-
-    print("Result:", result.content if hasattr(result, "content") else result)
+def find_tool_by_name(tools: List[BaseTool], tool_name: str) -> BaseTool:
+    for tool in tools:
+        if tool.name == tool_name:
+            return tool
+    raise ValueError(f"Tool wtih name {tool_name} not found")
 
 
 if __name__ == "__main__":
-    main()
+    print("Hello LangChain Tools (.bind_tools)!")
+    tools = [get_text_length]
+
+    llm = ChatOllama(
+        model="llama3.2",
+        temperature=0,
+        callbacks=[AgentCallbackHandler()],
+    )
+
+    llm_with_tools = llm.bind_tools(tools)
+
+    messages = [HumanMessage(content="What is the length of the word: DOG")]
+
+    while True:
+        ai_message = llm_with_tools.invoke(messages)
+
+        tool_calls = getattr(ai_message, "tool_calls", None) or []
+        if len(tool_calls) > 0:
+            messages.append(ai_message)
+            for tool_call in tool_calls:
+                tool_name = tool_call.get("name")
+                tool_args = tool_call.get("args", {})
+                tool_call_id = tool_call.get("id")
+
+                tool_to_use = find_tool_by_name(tools, tool_name)
+                observation = tool_to_use.invoke(tool_args)
+                print(f"observation={observation}")
+
+                messages.append(
+                    ToolMessage(content=str(observation), tool_call_id=tool_call_id)
+                )
+            continue
+
+        print(ai_message.content)
+        break
